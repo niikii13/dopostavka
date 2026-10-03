@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Расчёт допоставки WB</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#f5f6f8;--card:#fff;--tx:#1d2330;--mut:#6b7280;--bd:#e3e6ec;--ac:#7b2cbf;--ok:#16a34a;--bad:#dc2626}
+@media (prefers-color-scheme:dark){:root{--bg:#14161b;--card:#1d2027;--tx:#e8eaf0;--mut:#9aa1b0;--bd:#2c303a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:20px}
+.wrap{max-width:1100px;margin:0 auto}
+h1{font-size:20px;margin:0 0 14px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:14px}
+#drop{border:2px dashed var(--bd);border-radius:12px;padding:28px;text-align:center;cursor:pointer;color:var(--mut)}
+#drop.over{border-color:var(--ac);color:var(--ac)}
+#drop b{color:var(--tx)}
+.row{display:flex;gap:16px;flex-wrap:wrap;align-items:center}
+.meta div{margin:2px 0}.meta span{color:var(--mut)}
+label{color:var(--mut)}
+input[type=number]{width:80px;padding:6px 8px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);color:var(--tx)}
+button{padding:8px 14px;border:0;border-radius:8px;background:var(--ac);color:#fff;cursor:pointer;font:inherit}
+button.sec{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+.tabs{display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap}
+.tabs button{background:transparent;color:var(--tx);border:1px solid var(--bd)}
+.tabs button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.tw{overflow-x:auto}
+table{border-collapse:collapse;width:100%}
+th,td{padding:7px 10px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}
+th{position:sticky;top:0;background:var(--card);cursor:pointer;user-select:none;font-weight:600}
+td.n,th.n{text-align:right}
+.f th{cursor:default;padding:4px 6px;position:static}
+.f input{width:100%;min-width:70px;padding:5px 7px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx);font:inherit;font-size:12px}
+.dd{position:fixed;z-index:50;width:290px;max-height:340px;display:flex;flex-direction:column;background:var(--card);border:1px solid var(--bd);border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.2)}
+.dd.hide{display:none}
+.ddh{display:flex;gap:6px;padding:8px;border-bottom:1px solid var(--bd)}.ddh button{padding:5px 8px;font-size:12px}
+.ddl{overflow-y:auto;padding:4px 0}.ddl label{display:flex;gap:8px;align-items:center;padding:5px 12px;cursor:pointer;color:var(--tx)}
+.ddl label:hover{background:var(--bg)}.ddl input{width:auto}.ddl small{display:block;padding:6px 12px;color:var(--mut)}
+.f input.sel{border-color:var(--ac)}
+.ar{color:var(--mut);font-size:11px;margin-left:3px}.ar.on{color:var(--ac)}
+tfoot td{font-weight:700;border-top:2px solid var(--bd)}
+.hl{color:var(--ok);font-weight:700}
+.err{color:var(--bad)}
+.hide{display:none}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+.stat{background:var(--bg);border-radius:8px;padding:8px 12px}.stat b{display:block;font-size:18px}
+.stat span{color:var(--mut);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1>Расчёт допоставки по баркодам</h1>
+
+<div class="card">
+  <div id="drop">
+    <div><b>Перетащите файл отчёта (.xlsx) сюда</b> или нажмите, чтобы выбрать</div>
+    <input type="file" id="file" accept=".xlsx,.xls" class="hide">
+  </div>
+  <div id="msg" class="err" style="margin-top:8px"></div>
+</div>
+
+<div id="res" class="hide">
+  <div class="card row" style="justify-content:space-between">
+    <div class="meta">
+      <div><span>Организация:</span> <b id="org"></b></div>
+      <div><span>Период:</span> <b id="per"></b></div>
+    </div>
+    <div class="row">
+      <label>Плановый рост, коэфф.: <input type="number" id="k" value="1.25" step="0.01" min="0"></label>
+      <button class="sec" id="xl">Скачать Excel</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="stats" id="stats"></div>
+    <div class="tabs">
+      <button id="t1" class="on">К допоставке</button>
+      <button id="t2">Все баркоды</button>
+      <button id="rf" class="sec" style="margin-left:auto">Сбросить фильтры</button>
+    </div>
+    <div class="tw"><table id="tbl"><thead id="thead"></thead><tbody id="tbody"></tbody><tfoot id="tfoot"></tfoot></table></div>
+  </div>
+</div>
+</div>
+
+<script>
+const COLS = {seller:'Артикул продавца', wb:'Артикул WB', bc:'Баркод', size:'Размер',
+              ord:'шт.', buy:'Выкупили, шт.', stock:'Текущий остаток, шт.'};
+let all = [], info = {org:'', from:'', to:''}, tab = 'need', sortKey = null, sortDir = -1;
+
+const $ = id => document.getElementById(id);
+const num = v => { const n = parseFloat(String(v ?? '').replace(/\s/g,'').replace(',','.')); return isNaN(n) ? 0 : n; };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+/* ---------- 1. Название организации и период из A1 ---------- */
+function parseTitle(t){
+  t = String(t || '').replace(/\s+/g,' ').trim();
+  const dates = t.match(/с\s+(\d{2}\.\d{2}\.\d{4})\s+по\s+(\d{2}\.\d{2}\.\d{4})/i);
+  let org = '';
+  const q = t.match(/«(.+?)»/);                       // 1) в кавычках «...»
+  if (q) org = q[1];
+  else {                                              // 2) запасной: между "поставщика" и "с <дата>"
+    const m = t.match(/поставщика\s+(.+?)\s+с\s+\d{2}\.\d{2}\.\d{4}/i);
+    if (m) org = m[1].replace(/^["']|["']$/g,'');
+  }
+  return {org, from: dates ? dates[1] : '', to: dates ? dates[2] : ''};
+}
+
+/* ---------- 2. Чтение файла и сводная по баркодам ---------- */
+function process(rows){
+  // ищем строку шапки по слову «Баркод» (в первых 15 строках), а не по номеру
+  const h = rows.findIndex((r,i) => i < 15 && r.some(c => String(c).trim() === COLS.bc));
+  if (h < 0) throw new Error('Не найдена колонка «Баркод». Проверьте, что это отчёт поставщика WB.');
+  const head = rows[h].map(c => String(c).trim());
+  const idx = {};
+  for (const [k,name] of Object.entries(COLS)){
+    idx[k] = head.indexOf(name);
+    if (idx[k] < 0 && k !== 'size') throw new Error('Не найдена колонка «'+name+'»');
+  }
+  info = parseTitle(rows[0].find(c => String(c).trim()) || '');
+
+  const map = new Map();
+  for (const r of rows.slice(h+1)){
+    const bc = String(r[idx.bc] ?? '').trim();
+    if (!bc) continue;
+    let o = map.get(bc);
+    if (!o) map.set(bc, o = {bc, seller:String(r[idx.seller]??'').trim(), wb:String(r[idx.wb]??'').trim(),
+                             size:idx.size>=0 ? String(r[idx.size]??'').trim() : '', ord:0, buy:0, stock:0});
+    o.ord += num(r[idx.ord]); o.buy += num(r[idx.buy]); o.stock += num(r[idx.stock]);
+  }
+  all = [...map.values()];
+}
+
+/* ---------- 3. Расчёт допоставки ---------- */
+function calc(){
+  const k = num($('k').value);
+  all.forEach(o => {
+    o.plan = Math.ceil(+(o.buy * k).toFixed(6));   // выкупы × коэфф., вверх
+    o.need = o.plan - o.stock;                     // сколько допоставить
+  });
+}
+
+/* ---------- Отображение ---------- */
+let filters = {}, sel = {};
+function matchNum(v, q){
+  q = q.trim().replace(',','.'); if (!q) return true;
+  let m = q.match(/^(>=|<=|>|<|=)?\s*(-?\d+(?:\.\d+)?)$/);
+  if (m){ const n = +m[2];
+    switch(m[1]){ case '>':return v>n; case '>=':return v>=n; case '<':return v<n; case '<=':return v<=n; default:return v===n; } }
+  m = q.match(/^(-?\d+(?:\.\d+)?)\s*[-–:]\s*(-?\d+(?:\.\d+)?)$/);   // диапазон 5-10
+  return m ? (v >= +m[1] && v <= +m[2]) : true;
+}
+function applyF(rows, k, n){
+  const st = sel[k];
+  if (st && st.size) return rows.filter(o => st.has(String(o[k])));
+  const q = (filters[k] || '').trim(); if (!q) return rows;
+  return rows.filter(o => n ? matchNum(o[k], q) : String(o[k]).toLowerCase().includes(q.toLowerCase()));
+}
+function rowsFor(skip){
+  let rows = tab === 'need' ? all.filter(o => o.need > 0) : all.slice();
+  for (const [k,t,n] of HEAD) if (k !== skip) rows = applyF(rows, k, n);
+  return rows;
+}
+function view(){
+  const rows = rowsFor(null);
+  const key = sortKey || (tab === 'need' ? 'need' : 'seller');
+  const dir = sortKey ? sortDir : (tab === 'need' ? -1 : 1);
+  rows.sort((a,b) => (typeof a[key]==='number' ? a[key]-b[key] : String(a[key]).localeCompare(String(b[key]),'ru',{numeric:true})) * dir);
+  return rows;
+}
+const HEAD = [['seller','Артикул продавца'],['wb','Артикул WB'],['bc','Баркод'],['size','Размер'],
+              ['ord','Заказы',1],['buy','Выкупы',1],['stock','Остаток',1],['plan','Выкупы с ростом',1],['need','Допоставить',1]];
+
+function renderBody(){
+  const rows = view();
+  const sum = f => rows.reduce((s,o)=>s+o[f],0);
+  $('tbody').innerHTML = rows.length ? rows.map(o => '<tr>' + HEAD.map(([k,,n]) =>
+      `<td class="${n?'n':''} ${k==='need'&&o.need>0?'hl':''}">${esc(o[k])}</td>`).join('') + '</tr>').join('')
+    : '<tr><td colspan="9" style="text-align:center;color:var(--mut)">Нет позиций</td></tr>';
+  $('tfoot').innerHTML = `<tr><td colspan="4">Итого (${rows.length})</td>` +
+    ['ord','buy','stock','plan','need'].map(f => `<td class="n">${f==='need'&&tab==='all'?'':sum(f)}</td>`).join('') + '</tr>';
+}
+
+function render(){
+  calc();
+  const need = all.filter(o => o.need > 0);
+  $('stats').innerHTML = [['Баркодов всего', all.length],['К допоставке', need.length],
+    ['Штук к допоставке', need.reduce((s,o)=>s+o.need,0)]]
+    .map(([l,v]) => `<div class="stat"><b>${v}</b><span>${l}</span></div>`).join('');
+  const cur = sortKey || (tab === 'need' ? 'need' : 'seller');
+  const cdir = sortKey ? sortDir : (tab === 'need' ? -1 : 1);
+  $('thead').innerHTML =
+    '<tr>' + HEAD.map(([k,t,n]) => `<th class="${n?'n':''}" data-k="${k}">${t}<span class="ar ${cur===k?'on':''}">${cur===k?(cdir>0?'▲':'▼'):'⇅'}</span></th>`).join('') + '</tr>' +
+    '<tr class="f">' + HEAD.map(([k,t,n]) => `<th><input data-f="${k}" data-n="${n?1:''}" value="${esc(filters[k]||'')}" placeholder="${n?'>5, 3-10':'поиск / выбор'}" autocomplete="off"></th>`).join('') + '</tr>';
+  $('thead').querySelectorAll('th[data-k]').forEach(th => th.onclick = () => {
+    const k = th.dataset.k; sortDir = sortKey===k ? -sortDir : (th.classList.contains('n') ? -1 : 1); sortKey = k; render();
+  });
+  $('thead').querySelectorAll('input').forEach(i => {
+    i.oninput = () => { filters[i.dataset.f] = i.value; renderBody(); if (!i.dataset.n) { openDd(i); } };
+    if (!i.dataset.n) i.onfocus = () => openDd(i);
+  });
+  closeDd(); updPh(); renderBody();
+  $('t1').classList.toggle('on', tab==='need'); $('t2').classList.toggle('on', tab==='all');
+  $('org').textContent = info.org || '— не определено —';
+  $('per').textContent = info.from ? `${info.from} — ${info.to}` : '— не определён —';
+}
+
+/* ---------- Выпадающий список значений ---------- */
+const dd = document.createElement('div'); dd.className = 'dd hide'; document.body.appendChild(dd);
+let ddKey = null, ddInput = null, ddVals = [];
+function updPh(){
+  $('thead').querySelectorAll('input:not([data-n])').forEach(i => {
+    const n = (sel[i.dataset.f] || new Set()).size;
+    i.placeholder = n ? 'Выбрано: ' + n : 'поиск / выбор';
+    i.classList.toggle('sel', n > 0);
+  });
+}
+function closeDd(){ dd.classList.add('hide'); ddKey = null; }
+function openDd(inp){
+  ddKey = inp.dataset.f; ddInput = inp; drawDd();
+  const r = inp.getBoundingClientRect();
+  dd.style.left = Math.max(8, Math.min(r.left, innerWidth - 300)) + 'px';
+  dd.style.top = (r.bottom + 2) + 'px';
+  dd.classList.remove('hide');
+}
+function drawDd(){
+  const k = ddKey, q = (filters[k] || '').trim().toLowerCase(), st = sel[k] || (sel[k] = new Set());
+  ddVals = [...new Set(rowsFor(k).map(o => String(o[k])))].filter(v => v.toLowerCase().includes(q))
+            .sort((a,b) => a.localeCompare(b,'ru',{numeric:true}));
+  dd.innerHTML = `<div class="ddh"><button class="sec" data-a="all">Выбрать найденные (${ddVals.length})</button><button class="sec" data-a="none">Сбросить</button></div><div class="ddl">` +
+    ddVals.slice(0,500).map((v,i) => `<label><input type="checkbox" data-i="${i}" ${st.has(v)?'checked':''}> ${esc(v)}</label>`).join('') +
+    (ddVals.length > 500 ? '<small>Показаны первые 500, уточните поиск</small>' : '') +
+    (ddVals.length ? '' : '<small>Ничего не найдено</small>') + '</div>';
+}
+dd.addEventListener('change', e => {
+  const i = e.target.dataset.i; if (i === undefined) return;
+  const st = sel[ddKey], v = ddVals[i];
+  e.target.checked ? st.add(v) : st.delete(v);
+  updPh(); renderBody();
+});
+dd.addEventListener('click', e => {
+  const a = e.target.dataset.a; if (!a) return;
+  const st = sel[ddKey];
+  if (a === 'all') ddVals.forEach(v => st.add(v)); else st.clear();
+  filters[ddKey] = ''; ddInput.value = '';
+  drawDd(); updPh(); renderBody();
+});
+document.addEventListener('mousedown', e => { if (!dd.contains(e.target) && e.target !== ddInput) closeDd(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDd(); });
+window.addEventListener('scroll', e => { if (!dd.contains(e.target)) closeDd(); }, true);
+
+/* ---------- Загрузка ---------- */
+function load(f){
+  $('msg').textContent = '';
+  const rd = new FileReader();
+  rd.onload = e => {
+    try{
+      const wb = XLSX.read(e.target.result, {type:'array', raw:true});
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:'', raw:true});
+      process(rows); sortKey = null; tab = 'need'; filters = {}; sel = {};
+      $('res').classList.remove('hide'); render();
+    }catch(err){ $('res').classList.add('hide'); $('msg').textContent = 'Ошибка: ' + err.message; }
+  };
+  rd.readAsArrayBuffer(f);
+}
+const drop = $('drop');
+drop.onclick = () => $('file').click();
+$('file').onchange = e => e.target.files[0] && load(e.target.files[0]);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); e.dataTransfer.files[0] && load(e.dataTransfer.files[0]); };
+$('rf').onclick = () => { filters = {}; sel = {}; render(); };
+$('k').oninput = () => render();
+$('t1').onclick = () => { tab='need'; sortKey=null; render(); };
+$('t2').onclick = () => { tab='all'; sortKey=null; render(); };
+
+/* ---------- Экспорт ---------- */
+$('xl').onclick = () => {
+  const rows = view().map(o => ({'Артикул продавца':o.seller,'Артикул WB':Number(o.wb)||o.wb,'Баркод':o.bc,'Размер':o.size,
+    'Заказы':o.ord,'Выкупы':o.buy,'Остаток':o.stock,'Выкупы с ростом':o.plan,'Допоставить':o.need}));
+  const ws = XLSX.utils.json_to_sheet(rows);
+  ws['!cols'] = [22,14,16,8,9,9,9,16,12].map(w => ({wch:w}));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, tab==='need' ? 'К допоставке' : 'Все баркоды');
+  const name = ['Допоставка', info.org, info.from && (info.from+'-'+info.to)].filter(Boolean).join('_').replace(/[\\/:*?"<>|]/g,'');
+  XLSX.writeFile(wb, name + '.xlsx');
+};
+</script>
+</body>
+</html>
